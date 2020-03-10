@@ -293,6 +293,7 @@ data Command m a where
   FocusWindow :: Either Sentinel Window   -> Command m Bool
   FocusSpace  :: Space                    -> Command m Bool
   MoveWindow  :: Maybe Window -> Space    -> Command m Bool
+  SwapWindow  :: Sentinel                 -> Command m Bool
   MoveSpace   :: Maybe Space  -> Display  -> Command m Bool
   ShiftSpace  :: Maybe Space  -> Sentinel -> Command m Bool
 
@@ -350,6 +351,18 @@ prevWindow = do worked <- focusWindow (Left Previous)
                    then pure worked
                    else focusWindow (Left Last)
 
+moveWindowNext :: C
+moveWindowNext = do worked <- swapWindow Next
+                    if worked
+                       then pure worked
+                       else swapWindow First
+
+moveWindowPrev :: C
+moveWindowPrev = do worked <- swapWindow Previous
+                    if worked
+                       then pure worked
+                       else swapWindow Last
+
 -- | Shorthand for combinations of 'Query' and 'Command'
 type QC a = forall r. (Member Query r, Member Command r) => Sem r a
 
@@ -389,6 +402,7 @@ commandToYabaiArgs c = case c of
                            , maybe [] ((:[]) . show) w
                            , ["--space", show s]
                            ]
+  SwapWindow s   -> ["window", "--swap", show s]
 
 -- | Run 'Command' effects in 'IO' by sending them to Yabai
 commandYabai :: Member (Embed IO) r => Sem (Command ': r) a -> Sem r a
