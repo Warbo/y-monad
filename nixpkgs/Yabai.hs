@@ -13,15 +13,13 @@
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE TypeFamilies        #-}
-{-# OPTIONS_GHC -fno-warn-missing-methods #-}
+{-# OPTIONS_GHC -Werror -W -fno-warn-missing-methods #-}
 
 module Yabai where
 
 import Data.Aeson ((.:), decode, FromJSON(..), withObject)
-import Data.ByteString.Lazy (ByteString)
 import Data.Char (isDigit)
 import Data.String
-import Data.Void
 import Numeric.Natural (Natural)
 import Polysemy
 import System.Exit (ExitCode(..))
@@ -44,6 +42,9 @@ newtype Display = DID Natural deriving (Eq)
 
 instance Num Display where
   fromInteger = DID . fromInteger
+
+instance Show Display where
+  show (DID d) = show d
 
 -- | A 'Space' can contain any number of 'Window' values. A 'Space' can always
 --   be identified by a 'SpaceIndex'. We can associate a 'Space' with a
@@ -200,9 +201,9 @@ pluggedIn = (== 2) <$> displayCount
 
 lookupSpace :: Space -> Q (Maybe SpaceInfo)
 lookupSpace s = head' . filter f <$> getSpaces
-  where (f, debug) = case s of
-          Left  i -> ((==      i) . sIndex, ("index", show i))
-          Right l -> ((== Just l) . sLabel, ("label", show l))
+  where f = case s of
+          Left  i -> (==      i) . sIndex
+          Right l -> (== Just l) . sLabel
 
         head' (x:_) = Just x
         head' _     = Nothing
@@ -290,12 +291,12 @@ queryYabai = interpret (embed . query)
 
 -- | The commands we want to send to Yabai
 data Command m a where
-  FocusWindow :: Either Sentinel Window   -> Command m Bool
-  FocusSpace  :: Space                    -> Command m Bool
-  MoveWindow  :: Maybe Window -> Space    -> Command m Bool
-  SwapWindow  :: Sentinel                 -> Command m Bool
-  MoveSpace   :: Maybe Space  -> Display  -> Command m Bool
-  ShiftSpace  :: Maybe Space  -> Sentinel -> Command m Bool
+  FocusWindow  :: Either Sentinel Window  -> Command m Bool
+  FocusSpace   :: Space                   -> Command m Bool
+  FocusDisplay :: Either Sentinel Display -> Command m Bool
+  MoveWindow   :: Maybe Window -> Space   -> Command m Bool
+  SwapWindow   :: Sentinel                -> Command m Bool
+  MoveSpace    :: Display                 -> Command m Bool
 
 -- | The 'Command' effect is polymorphic, but its constructors only use 'Bool'.
 --   To handle a 'Command' we may need to use 'Bool' functions, but they're not
@@ -303,12 +304,12 @@ data Command m a where
 --   advantage of the fact that 'Command m a' is always 'Command m Bool'.
 castCommand :: Command m a -> Bool -> a
 castCommand c b = case c of
-  FocusWindow _   -> b
-  FocusSpace  _   -> b
-  MoveWindow  _ _ -> b
-  SwapWindow  _   -> b
-  MoveSpace   _ _ -> b
-  ShiftSpace  _ _ -> b
+  FocusWindow  _   -> b
+  FocusSpace   _   -> b
+  FocusDisplay _   -> b
+  MoveWindow   _ _ -> b
+  SwapWindow   _   -> b
+  MoveSpace    _   -> b
 
 -- | Special directions or places to move a 'Space' or 'Window'
 data Sentinel = Previous | Next | First | Last
@@ -330,10 +331,10 @@ type C = forall r. Member Command r => Sem r Bool
 -- Useful actions
 
 -- | Moves each previously-visible 'Space' back to the 'Display' it was on
-restoreVisibleToDisplays :: [(SpaceLabel, Display)] -> C
+restoreVisibleToDisplays :: [(SpaceLabel, Display)] -> QC Bool
 restoreVisibleToDisplays xs = all id <$> mapM f xs
-  where f :: (SpaceLabel, Display) -> C
-        f (l, d) = moveSpace (Just (Right l)) d
+  where f :: (SpaceLabel, Display) -> QC Bool
+        f (l, d) = moveSpaceToDisplay (Right l) d
 
 -- | Focuses the 'Space' that was previously focused.
 restoreFocusedSpace :: SpaceLabel -> C
@@ -345,7 +346,7 @@ restoreVisibleSpaces :: [(SpaceLabel, Display)] -> C
 restoreVisibleSpaces xs = all id <$> mapM (focusSpace . label . fst) xs
 
 -- | Restores which 'Space' is visible on each 'Display', and which is focused.
-restoreVisibleState :: ([(SpaceLabel, Display)], SpaceLabel) -> C
+restoreVisibleState :: ([(SpaceLabel, Display)], SpaceLabel) -> QC Bool
 restoreVisibleState (visible, focused) = restoreVisibleToDisplays visible >>
                                          restoreVisibleSpaces     visible >>
                                          restoreFocusedSpace      focused
@@ -376,18 +377,37 @@ moveWindowPrev = do worked <- swapWindow Previous
                        then pure worked
                        else swapWindow Last
 
+displayNext :: C
+displayNext = do worked <- focusDisplay (Left Next)
+                 if worked
+                    then pure worked
+                    else focusDisplay (Left First)
+
+displayPrev :: C
+displayPrev = do worked <- focusDisplay (Left Previous)
+                 if worked
+                    then pure worked
+                    else focusDisplay (Left Last)
+
+moveSpaceToDisplay :: Space -> Display -> QC Bool
+moveSpaceToDisplay s d = do vis     <- visibleState
+                            focused <- focusSpace s
+                            moved   <- if focused
+                                          then moveSpace d
+                                          else pure False
+                            -- Restore the previous state, except for displays,
+                            -- if we managed to store it. If not, oh well.
+                            case (moved, vis) of
+                              (False, _          ) -> pure moved
+                              (True, Nothing     ) -> pure moved
+                              (True, Just (vs, f)) -> do restoreVisibleSpaces vs
+                                                         restoreFocusedSpace  f
+                                                         pure moved
+
 -- | Shorthand for combinations of 'Query' and 'Command'
 type QC a = forall r. (Member Query r, Member Command r) => Sem r a
 
-focusDisplay :: Display -> QC Bool
-focusDisplay d = do spaces <- getSpaces
-                    let find s = sVisible s && sDisplay s == d
-                        lspace = filter find spaces
-                    case lspace of
-                      [space] -> focusSpace (index (sIndex space))
-                      _       -> pure False
-
-
+{-
 shiftSpaceToIndex :: Space -> SpaceIndex -> QC ()
 shiftSpaceToIndex s want = ql >>= go
   where go :: SpaceLabel -> QC ()
@@ -406,16 +426,21 @@ shiftSpaceToIndex s want = ql >>= go
                     case mi of
                       Nothing -> err ("No index for space", l)
                       Just i  -> pure (i == want)
+-}
 
 commandToYabaiArgs :: Command m a -> [String]
-commandToYabaiArgs c = case c of
-  FocusWindow  w -> ["-m", "window", "--focus", either show show w]
-  FocusSpace   s -> ["-m", "space" , "--focus", either show show s]
-  MoveWindow w s -> concat [ ["-m", "window", "--move"]
-                           , maybe [] ((:[]) . show) w
-                           , ["--space", show s]
-                           ]
-  SwapWindow s   -> ["window", "--swap", show s]
+commandToYabaiArgs c = "-m" : case c of
+  FocusWindow  w  -> ["window" , "--focus", either show show w]
+  FocusSpace   s  -> ["space"  , "--focus",        showSpace s]
+  FocusDisplay d  -> ["display", "--focus", either show show d]
+
+  MoveWindow w s  -> concat [ ["window", "--move"]
+                            , maybe [] ((:[]) . show) w
+                            , ["--space", show s]
+                            ]
+  SwapWindow s    -> ["window", "--swap"   , show s]
+
+  MoveSpace  d    -> ["space" , "--display", show d]
 
 -- | Run 'Command' effects in 'IO' by sending them to Yabai
 commandYabai :: Member (Embed IO) r => Sem (Command ': r) a -> Sem r a
@@ -428,7 +453,7 @@ commandYabai = interpret (embed . command)
           let cmd = proc "yabai" args
           (code, _, _) <- readCreateProcessWithExitCode cmd ""
           pure $ case code of
-            ExitFailure c -> False
+            ExitFailure _ -> False
             ExitSuccess   -> True
 
 -- | Runner for generated Main modules
