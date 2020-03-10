@@ -291,6 +291,8 @@ queryYabai = interpret (embed . query)
 
 -- | The commands we want to send to Yabai
 data Command m a where
+  CreateSpace  ::                            Command m Bool
+  DestroySpace ::                            Command m Bool
   FocusWindow  :: Either Sentinel Window  -> Command m Bool
   FocusSpace   :: Space                   -> Command m Bool
   FocusDisplay :: Either Sentinel Display -> Command m Bool
@@ -304,6 +306,8 @@ data Command m a where
 --   advantage of the fact that 'Command m a' is always 'Command m Bool'.
 castCommand :: Command m a -> Bool -> a
 castCommand c b = case c of
+  CreateSpace      -> b
+  DestroySpace     -> b
   FocusWindow  _   -> b
   FocusSpace   _   -> b
   FocusDisplay _   -> b
@@ -434,6 +438,9 @@ spaceLabels = LABELS_GO_HERE
 
 commandToYabaiArgs :: Command m a -> [String]
 commandToYabaiArgs c = "-m" : case c of
+  CreateSpace     -> ["space", "--create" ]
+  DestroySpace    -> ["space", "--destroy"]
+
   FocusWindow  w  -> ["window" , "--focus", either show show w]
   FocusSpace   s  -> ["space"  , "--focus",        showSpace s]
   FocusDisplay d  -> ["display", "--focus", either show show d]
