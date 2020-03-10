@@ -428,6 +428,10 @@ shiftSpaceToIndex s want = ql >>= go
                       Just i  -> pure (i == want)
 -}
 
+-- The space labels we want will get spliced in here during the build
+spaceLabels :: [SpaceLabel]
+spaceLabels = LABELS_GO_HERE
+
 commandToYabaiArgs :: Command m a -> [String]
 commandToYabaiArgs c = "-m" : case c of
   FocusWindow  w  -> ["window" , "--focus", either show show w]
