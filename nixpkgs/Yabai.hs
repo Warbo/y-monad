@@ -217,6 +217,9 @@ displayOfSpace s = fmap sDisplay <$> lookupSpace s
 spaceOnDisplay :: Space -> Display -> Q Bool
 spaceOnDisplay s d = (== Just d) <$> displayOfSpace s
 
+spacesOnDisplay :: Display -> Q [SpaceIndex]
+spacesOnDisplay d = map sIndex . filter ((== d) . sDisplay) <$> getSpaces
+
 indexOfSpace :: SpaceLabel -> Q (Maybe SpaceIndex)
 indexOfSpace l = fmap sIndex <$> lookupSpace (Right l)
 
@@ -410,6 +413,45 @@ moveSpaceToDisplay s d = do vis     <- visibleState
 
 -- | Shorthand for combinations of 'Query' and 'Command'
 type QC a = forall r. (Member Query r, Member Command r) => Sem r a
+
+populateSpaces :: QC ()
+populateSpaces = destroyBloat >> populate
+  where -- Keep destroying 'Space' values until there are as many as spaceLabels
+        destroyBloat :: QC ()
+        destroyBloat = do spaces <- getSpaces
+                          if length spaces > length spaceLabels
+                             then do s <- destroyableSpace
+                                     focusSpace (index s)
+                                     destroySpace
+                                     destroyBloat
+                             else pure ()
+
+        -- Whether a 'Space' contains no 'Window' (less impact if destroyed)
+        emptySpaces :: [SpaceInfo] -> [SpaceIndex]
+        emptySpaces = map sIndex . filter (null . sWindows)
+
+        -- We can only destroy a 'Space' if there are others on its 'Display'
+        destroyable :: [DisplayInfo] -> SpaceIndex -> Bool
+        destroyable displays s = let info = head                          .
+                                            filter ((s `elem`) . dSpaces) $
+                                            displays
+                                  in not (null (dSpaces info))
+
+        -- Pick a 'Space' which can be destroyed, preferring empty ones
+        destroyableSpace :: Q SpaceIndex
+        destroyableSpace = do spaces   <- getSpaces
+                              displays <- getDisplays
+                              let preferable = filter (destroyable displays)
+                                                      (emptySpaces spaces)
+                                  fallbacks  = filter (destroyable displays)
+                                                      (map sIndex spaces)
+                              pure (head (preferable ++ fallbacks))
+
+        populate :: QC ()
+        populate = do spaces <- getSpaces
+                      if length spaces < length spaceLabels
+                         then createSpace >> populate
+                         else pure ()
 
 {-
 shiftSpaceToIndex :: Space -> SpaceIndex -> QC ()
