@@ -297,6 +297,19 @@ data Command m a where
   MoveSpace   :: Maybe Space  -> Display  -> Command m Bool
   ShiftSpace  :: Maybe Space  -> Sentinel -> Command m Bool
 
+-- | The 'Command' effect is polymorphic, but its constructors only use 'Bool'.
+--   To handle a 'Command' we may need to use 'Bool' functions, but they're not
+--   polymorphic enough for a generic handler. This function casts them, taking
+--   advantage of the fact that 'Command m a' is always 'Command m Bool'.
+castCommand :: Command m a -> Bool -> a
+castCommand c b = case c of
+  FocusWindow _   -> b
+  FocusSpace  _   -> b
+  MoveWindow  _ _ -> b
+  SwapWindow  _   -> b
+  MoveSpace   _ _ -> b
+  ShiftSpace  _ _ -> b
+
 -- | Special directions or places to move a 'Space' or 'Window'
 data Sentinel = Previous | Next | First | Last
 
@@ -408,10 +421,7 @@ commandToYabaiArgs c = case c of
 commandYabai :: Member (Embed IO) r => Sem (Command ': r) a -> Sem r a
 commandYabai = interpret (embed . command)
   where command :: Command m a -> IO a
-        command c = let go = run (commandToYabaiArgs c) in case c of
-          FocusWindow _  -> go
-          FocusSpace _   -> go
-          MoveWindow _ _ -> go
+        command c = castCommand c <$> run (commandToYabaiArgs c)
 
         run :: [String] -> IO Bool
         run args = do
