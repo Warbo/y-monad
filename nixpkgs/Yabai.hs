@@ -19,6 +19,8 @@ module Yabai where
 
 import Data.Aeson ((.:), decode, FromJSON(..), withObject)
 import Data.Char (isDigit)
+import Data.List (delete)
+import Data.Maybe (mapMaybe)
 import Data.String
 import Numeric.Natural (Natural)
 import Polysemy
@@ -142,7 +144,7 @@ data SpaceInfo = SI { sLabel   :: Maybe SpaceLabel
                     , sWindows :: [Window]
                     , sVisible :: Bool
                     , sFocused :: Bool
-                    }
+                    } deriving (Show)
 
 instance FromJSON SpaceInfo where
   parseJSON = withObject "SpaceInfo" $ \o -> do
@@ -296,12 +298,13 @@ queryYabai = interpret (embed . query)
 data Command m a where
   CreateSpace  ::                            Command m Bool
   DestroySpace ::                            Command m Bool
-  FocusWindow  :: Either Sentinel Window  -> Command m Bool
-  FocusSpace   :: Space                   -> Command m Bool
-  FocusDisplay :: Either Sentinel Display -> Command m Bool
-  MoveWindow   :: Maybe Window -> Space   -> Command m Bool
-  SwapWindow   :: Sentinel                -> Command m Bool
-  MoveSpace    :: Display                 -> Command m Bool
+  LabelSpace   :: SpaceIndex -> SpaceLabel -> Command m Bool
+  FocusWindow  :: Either Sentinel Window   -> Command m Bool
+  FocusSpace   :: Space                    -> Command m Bool
+  FocusDisplay :: Either Sentinel Display  -> Command m Bool
+  MoveWindow   :: Maybe Window -> Space    -> Command m Bool
+  SwapWindow   :: Sentinel                 -> Command m Bool
+  MoveSpace    :: Display                  -> Command m Bool
 
 -- | The 'Command' effect is polymorphic, but its constructors only use 'Bool'.
 --   To handle a 'Command' we may need to use 'Bool' functions, but they're not
@@ -311,6 +314,7 @@ castCommand :: Command m a -> Bool -> a
 castCommand c b = case c of
   CreateSpace      -> b
   DestroySpace     -> b
+  LabelSpace   _ _ -> b
   FocusWindow  _   -> b
   FocusSpace   _   -> b
   FocusDisplay _   -> b
@@ -474,26 +478,57 @@ shiftSpaceToIndex s want = ql >>= go
                       Just i  -> pure (i == want)
 -}
 
+labelSpaces :: QC ()
+labelSpaces = do spaces <- getSpaces
+                 removeDodgyLabels spaces
+                 mapM_ ensureLabelled spaceLabels
+
+  where removeDodgyLabels :: [SpaceInfo] -> C
+        removeDodgyLabels spaces = let f info = (,sIndex info) <$> sLabel info
+                                       labels = mapMaybe f spaces
+                                    in removeHelper spaces labels spaceLabels
+
+        removeHelper :: [SpaceInfo]
+                     -> [(SpaceLabel, SpaceIndex)]
+                     -> [SpaceLabel]
+                     -> C
+        removeHelper _      []          _      = pure True
+        removeHelper spaces ((l, i):ls) labels =
+          if l `elem` labels
+             then removeHelper spaces ls (delete l labels)
+             else do labelSpace i (SLabel "")
+                     removeHelper spaces ls labels
+
+        ensureLabelled :: SpaceLabel -> QC Bool
+        ensureLabelled l = do spaces <- getSpaces
+                              case filter ((== Just l) . sLabel) spaces of
+                                [_] -> pure True
+                                []  -> let unlabelled = (== Nothing) . sLabel
+                                           s = head . filter unlabelled $ spaces
+                                        in labelSpace (sIndex s) l
+                                ss  -> err ("Duplicate labels", ss)
+
 -- The space labels we want will get spliced in here during the build
 spaceLabels :: [SpaceLabel]
 spaceLabels = LABELS_GO_HERE
 
 commandToYabaiArgs :: Command m a -> [String]
 commandToYabaiArgs c = "-m" : case c of
-  CreateSpace     -> ["space", "--create" ]
-  DestroySpace    -> ["space", "--destroy"]
+  CreateSpace    -> ["space", "--create" ]
+  DestroySpace   -> ["space", "--destroy"]
+  LabelSpace s l -> ["space", show s, "--label", show l]
 
-  FocusWindow  w  -> ["window" , "--focus", either show show w]
-  FocusSpace   s  -> ["space"  , "--focus",        showSpace s]
-  FocusDisplay d  -> ["display", "--focus", either show show d]
+  FocusWindow  w -> ["window" , "--focus", either show show w]
+  FocusSpace   s -> ["space"  , "--focus",        showSpace s]
+  FocusDisplay d -> ["display", "--focus", either show show d]
 
-  MoveWindow w s  -> concat [ ["window", "--move"]
-                            , maybe [] ((:[]) . show) w
-                            , ["--space", show s]
-                            ]
-  SwapWindow s    -> ["window", "--swap"   , show s]
+  MoveWindow w s -> concat [ ["window", "--move"]
+                           , maybe [] ((:[]) . show) w
+                           , ["--space", show s]
+                           ]
+  SwapWindow s   -> ["window", "--swap"   , show s]
 
-  MoveSpace  d    -> ["space" , "--display", show d]
+  MoveSpace  d   -> ["space" , "--display", show d]
 
 -- | Run 'Command' effects in 'IO' by sending them to Yabai
 commandYabai :: Member (Embed IO) r => Sem (Command ': r) a -> Sem r a
