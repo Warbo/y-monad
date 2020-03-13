@@ -89,6 +89,42 @@ genDisplays = go []
                               }
           go (display:acc) (n-1)
 
+-- | Shrink function to simplify counterexamples, used with 'forAllShrink'. Note
+--   that we don't make an 'Arbitrary' instance since it would overlap with the
+--   generic 'Arbitrary a => Arbitrary [a]' instance.
+shrinkDisplays :: [DisplayInfo] -> [[DisplayInfo]]
+shrinkDisplays dis = concat [
+      if length dis > 1 then [take 1 dis, fixIndices (drop 1 dis)] else []
+    , if dropped == dis then [] else [dropped]
+    ]
+  where dropped = fixIndices (dropSpaces [] dis)
+
+        fixIndices = let nextDID       = DID . fromIntegral . (+1) . length
+                         nextDI acc ss = DI { dDisplay = nextDID acc
+                                            , dSpaces  = map (inc acc) [1..ss]
+                                            }
+                         inc acc       = SIndex       .
+                                         fromIntegral .
+                                         (+ length (concatMap dSpaces acc))
+
+                         fixDI acc d   = nextDI acc (length (dSpaces d))
+
+                         go acc []     = reverse acc
+                         go acc (d:ds) = go (fixDI acc d:acc) ds
+                      in go []
+
+        dropSpaces acc []     = reverse acc
+        dropSpaces acc (d:ds) =
+          let spaces    = dSpaces d
+              sCount    = length spaces
+              newCount  = sCount `div` 2
+              newSpaces = if null spaces
+                             then spaces
+                             else if even (length acc)
+                                     then take newCount spaces
+                                     else drop newCount spaces
+           in dropSpaces (d { dSpaces = newSpaces }:acc) ds
+
 -- | Generate a list of 'SpaceInfo' entries, consistent with the given
 --   'DisplayInfo' entries.
 genSpaces :: [[SpaceIndex]] -> Natural -> Gen [SpaceInfo]
