@@ -17,6 +17,8 @@
 
 module Main where
 
+import Data.Maybe (isJust)
+import Data.List (nub)
 import Numeric.Natural (Natural)
 import Polysemy
 import Polysemy.State
@@ -28,26 +30,74 @@ import Yabai
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "State tests" [
-    testProperty "Generated displays count upwards"
-      (forAllDisplays (\dis ->
-        let got  = map dDisplay             dis
-            want = map (DID . fromIntegral) [1..length dis]
-         in got === want))
+tests = testGroup "All tests" [
+    testGroup "Tests of stateful interpreter" [
+      testGroup "Display generation" [
+        testProperty "Generated displays count upwards"
+          (forAllDisplays (\dis ->
+            let got  = map dDisplay             dis
+                want = map (DID . fromIntegral) [1..length dis]
+             in got === want))
 
-  , testProperty "Generated displays have at least one space each"
-      (forAllDisplays
-        (all (not . null . dSpaces)))
+      , testProperty "Generated displays have at least one space each"
+          (forAllDisplays
+            (all (not . null . dSpaces)))
 
-  , testProperty "Generated displays have space indices counting up"
-      (forAllDisplays (\dis ->
-        let got  = concatMap dSpaces dis
-            want = map SIndex (take (length got) [1..])
-         in got === want))
+      , testProperty "Generated displays have space indices counting up"
+          (forAllDisplays (\dis ->
+            let got  = concatMap dSpaces dis
+                want = map SIndex (take (length got) [1..])
+             in got === want))
+      ]
+      , testGroup "Space generation" [
+          testProperty "Generate correct number of spaces"
+            (forAllDisplaySpaces (\(dis, sis) ->
+              let want = sum (map (length . dSpaces) dis)
+               in length sis === want))
+
+        , testProperty "Generate correct space indices"
+            (forAllDisplaySpaces (\(dis, sis) ->
+              let want = concatMap dSpaces dis
+                  got  = map sIndex sis
+               in got === want))
+
+        , testProperty "Spaces have correct displays"
+            (forAllDisplaySpaces (\(dis, sis) ->
+              let onDisplay di si = sIndex si `elem` dSpaces di
+
+                  checkDisplay di = let spaces = filter (onDisplay di) sis
+                                     in conjoin
+                                          (map ((=== dDisplay di) . sDisplay)
+                                               spaces)
+
+               in conjoin (map checkDisplay dis)))
+
+        , testProperty "Space indices count up"
+            (forAllSpaces (\sis ->
+              let got  =                    map sIndex sis
+                  want = take (length got) (map SIndex [1..])
+               in got === want))
+      ]
+    ]
   ]
-  where forAllDisplays :: Testable prop => ([DisplayInfo] -> prop) -> Property
-        forAllDisplays = forAllShrink (chooseNat (1, 20) >>= genDisplays)
-                                      shrinkDisplays
+  where forAllDisplays :: ForAll [DisplayInfo]
+        forAllDisplays = forAllShrink genDisplays shrinkDisplays
+
+        forAllSpaces :: ForAll [SpaceInfo]
+        forAllSpaces = forAllShrink (genDisplays >>= genSpaces) shrinkSpaces
+
+        forAllDisplaySpaces :: ForAll ([DisplayInfo], [SpaceInfo])
+        forAllDisplaySpaces = forAllShrink
+          (do dis <- genDisplays
+              sis <- genSpaces dis
+              pure (dis, sis))
+          shrinkSpacesAndDisplays
+
+
+type ForAll a = forall prop. Testable prop => (a -> prop) -> Property
+
+spaceIndices :: [DisplayInfo] -> [SpaceIndex]
+spaceIndices = concatMap dSpaces
 
 --prop_mkSpaceExists
 
@@ -73,9 +123,8 @@ chooseNat (min, max) = fromIntegral <$> choose @Int ( fromIntegral min
 
 genWMState :: Natural -> Gen WMState
 genWMState dCount = do
-    displays    <- genDisplays dCount
-    extraSpaces <- chooseNat (0, 20)
-    spaces      <- genSpaces (map dSpaces displays) extraSpaces
+    displays    <- genNDisplays dCount
+    spaces      <- genSpaces displays
     windows     <- error "NO WINDOWS IMPLEMENTED"
     seeds       <- arbitrary
     pure (State { stateDisplays = displays
@@ -86,8 +135,8 @@ genWMState dCount = do
 
 -- | Generate a list of consistent 'DisplayInfo' entries (i.e. their 'dSpaces'
 --   indices count up from 1)
-genDisplays :: Natural -> Gen [DisplayInfo]
-genDisplays = go []
+genNDisplays :: Natural -> Gen [DisplayInfo]
+genNDisplays = go []
   where go :: [DisplayInfo] -> Natural -> Gen [DisplayInfo]
         go acc 0 = pure (reverse acc)
         go acc n = do
@@ -100,6 +149,9 @@ genDisplays = go []
                                                newIndices
                               }
           go (display:acc) (n-1)
+
+genDisplays :: Gen [DisplayInfo]
+genDisplays = chooseNat (1, 20) >>= genNDisplays
 
 -- | Shrink function to simplify counterexamples, used with 'forAllShrink'. Note
 --   that we don't make an 'Arbitrary' instance since it would overlap with the
@@ -139,12 +191,121 @@ shrinkDisplays dis = concat [
 
 -- | Generate a list of 'SpaceInfo' entries, consistent with the given
 --   'DisplayInfo' entries.
-genSpaces :: [[SpaceIndex]] -> Natural -> Gen [SpaceInfo]
-genSpaces _ = go []
-  where go :: [SpaceInfo] -> Natural -> Gen [SpaceInfo]
-        go acc 0 = pure (reverse acc)
-        go _ _ = do
-          error "NOT IMPLEMENTED"
+genSpaces :: [DisplayInfo] -> Gen [SpaceInfo]
+genSpaces = go []
+  where go :: [SpaceInfo] -> [DisplayInfo] -> Gen [SpaceInfo]
+        go acc []       = do n <- arbitrary
+                             pure (focusAndVisible n (reverse acc))
+        go acc (di:dis) = do spaces <- genForDisplay di
+                             go (reverse spaces ++ acc) dis
+
+        genForDisplay :: DisplayInfo -> Gen [SpaceInfo]
+        genForDisplay di = mapM (genSpace (dDisplay di)) (dSpaces di)
+
+        genSpace :: Display -> SpaceIndex -> Gen SpaceInfo
+        genSpace d i = do
+          label   <- genMaybeLabel
+          windows <- map WID <$> arbitrary
+          pure $
+            SI { sLabel   = label
+               , sIndex   = i
+               , sDisplay = d
+               , sWindows = windows
+               , sVisible = False  -- Default; may be replaced before returning
+               , sFocused = False  -- Default; may be replaced before returning
+               }
+
+shrinkSpaces :: [SpaceInfo] -> [[SpaceInfo]]
+shrinkSpaces sis = concat [
+    -- Try to discard a 'Display', since that's a big simplification
+    if length displays > 1 then map dropDisplay displays else []
+
+    -- Try to discard a 'Space', since that's pretty major
+  , if length sis > length displays then concatMap dropSpace sis else []
+
+    -- Last resort, see if we can discard a 'Window'
+  , if null windows then [] else map dropWindow windows
+  ]
+  where dropDisplay :: Display -> [SpaceInfo]
+        dropDisplay d = makeConsistent (filter ((/= d) . sDisplay) sis)
+
+        -- We might be unable to remove a space (if it's the only one on a
+        -- display); we return [] in that case
+        dropSpace :: SpaceInfo -> [[SpaceInfo]]
+        dropSpace s =
+          let i   = sIndex s
+              d   = sDisplay s
+              onD = filter ((== d) . sDisplay) sis
+           in if null onD
+                 then []
+                 else [makeConsistent (filter ((/= i) . sIndex) sis)]
+
+        dropWindow :: Window -> [SpaceInfo]
+        dropWindow w =
+          let dropW w si = si { sWindows = filter (/= w) (sWindows si) }
+           in map (dropW w) sis
+
+        displays = nub (map sDisplay sis)
+
+        windows  = concatMap sWindows sis
+
+        makeConsistent =
+          focusAndVisible (length sis + 123) .
+          zipWith (\i si -> si { sIndex = SIndex i }) [1..]
+
+
+-- | Shrink '([DisplayInfo], [SpaceInfo])' whilst maintaining their consistency.
+--   In particular:
+--    - We keep at least one 'Display'
+--    - We keep at least one 'Space' per 'Display'
+--    - When a 'DisplayInfo' is discarded, so are any corresponding 'SpaceInfo'
+--    - There will always be exactly one visible 'Space' per 'Display'
+--    - There will always be exactly one focused 'Space' among the visible
+shrinkSpacesAndDisplays (dis, sis) =
+    map pickVis
+        (filter nonEmpty
+                (map (\dis' -> (dis', fixSpaces dis'))
+                     (shrinkDisplays dis)))
+  where fixSpaces :: [DisplayInfo] -> [SpaceInfo]
+        fixSpaces dis' = filter
+          (\si -> sIndex   si `elem` concatMap dSpaces  dis' &&
+                  sDisplay si `elem`       map dDisplay dis')
+          sis
+
+        nonEmpty :: ([a], [b]) -> Bool
+        nonEmpty (dis', sis') = not (null dis') && not (null sis')
+
+        pickVis (dis', sis') =
+          let arbitraryNum = product [length dis + 1, length sis + 1] +
+                             (length dis' * length sis')
+           in (dis', focusAndVisible arbitraryNum sis')
+
+focusAndVisible :: Int -> [SpaceInfo] -> [SpaceInfo]
+focusAndVisible _ []  = error "Can't have no spaces"
+focusAndVisible n sis = map modify sis
+  where displays   = nub (map sDisplay sis)
+
+        spacesOn d = map sIndex (filter ((== d) . sDisplay) sis)
+
+        visible    = map (\d -> let spaces = spacesOn d
+                                 in spaces !! (n `mod` length spaces))
+                         displays
+
+        focus      = visible !! (n `mod` length displays)
+
+        modify si  = si { sFocused = sIndex si ==     focus
+                        , sVisible = sIndex si `elem` visible
+                        }
+
+genMaybeLabel :: Gen (Maybe SpaceLabel)
+genMaybeLabel = do s <- arbitrary
+                   pure (if s == "" then Nothing else Just (SLabel s))
+
+shrinkMaybeLabel :: Maybe SpaceLabel -> [Maybe SpaceLabel]
+shrinkMaybeLabel Nothing           = []
+shrinkMaybeLabel (Just (SLabel l)) = Nothing : filter isJust (map go (shrink l))
+  where go "" = Nothing
+        go x  = Just (SLabel x)
 
 instance Arbitrary WMState where
   arbitrary = do
