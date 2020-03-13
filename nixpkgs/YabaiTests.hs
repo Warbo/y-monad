@@ -30,15 +30,24 @@ main = defaultMain tests
 tests :: TestTree
 tests = testGroup "State tests" [
     testProperty "Generated displays count upwards"
-      (forAllShrink (chooseNat (1, 20) >>= genDisplays) shrinkDisplays
-        (\dis -> let got  = map dDisplay             dis
-                     want = map (DID . fromIntegral) [1..length dis]
-                  in got === want))
+      (forAllDisplays (\dis ->
+        let got  = map dDisplay             dis
+            want = map (DID . fromIntegral) [1..length dis]
+         in got === want))
 
   , testProperty "Generated displays have at least one space each"
-      (forAllShrink (chooseNat (1, 20) >>= genDisplays) shrinkDisplays
+      (forAllDisplays
         (all (not . null . dSpaces)))
+
+  , testProperty "Generated displays have space indices counting up"
+      (forAllDisplays (\dis ->
+        let got  = concatMap dSpaces dis
+            want = map SIndex (take (length got) [1..])
+         in got === want))
   ]
+  where forAllDisplays :: Testable prop => ([DisplayInfo] -> prop) -> Property
+        forAllDisplays = forAllShrink (chooseNat (1, 20) >>= genDisplays)
+                                      shrinkDisplays
 
 --prop_mkSpaceExists
 
