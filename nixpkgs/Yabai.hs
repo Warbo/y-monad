@@ -124,7 +124,7 @@ data Query m a where
 --   it contains.
 data DisplayInfo = DI { dDisplay :: Display
                       , dSpaces  :: [SpaceIndex]
-                      } deriving (Show)
+                      } deriving (Eq, Show)
 
 instance FromJSON DisplayInfo where
   parseJSON = withObject "DisplayInfo" $ \o -> do

@@ -30,11 +30,11 @@ main = defaultMain tests
 tests :: TestTree
 tests = testGroup "State tests" [
     testProperty "Generated displays count upwards"
-                (forAll (chooseNat (1, 20) >>= genDisplays)
-                        (\dis -> let got  = map dDisplay dis
-                                     want = map (DID . fromIntegral)
-                                                [1..length dis]
-                                  in got === want))
+      (forAllShrink (chooseNat (1, 20) >>= genDisplays) shrinkDisplays
+        (\dis -> let got  = map dDisplay             dis
+                     want = map (DID . fromIntegral) [1..length dis]
+                  in got === want))
+
   ]
 
 --prop_mkSpaceExists
@@ -61,11 +61,11 @@ chooseNat (min, max) = fromIntegral <$> choose @Int ( fromIntegral min
 
 genWMState :: Natural -> Gen WMState
 genWMState dCount = do
-    displays <- genDisplays dCount
-    sCount   <- chooseNat (0, 20)
-    spaces   <- genSpaces (map dSpaces displays) sCount
-    windows  <- error "NO WINDOWS IMPLEMENTED"
-    seeds    <- arbitrary
+    displays    <- genDisplays dCount
+    extraSpaces <- chooseNat (0, 20)
+    spaces      <- genSpaces (map dSpaces displays) extraSpaces
+    windows     <- error "NO WINDOWS IMPLEMENTED"
+    seeds       <- arbitrary
     pure (State { stateDisplays = displays
                 , stateSpaces   = spaces
                 , stateWindows  = windows
@@ -79,7 +79,7 @@ genDisplays = go []
   where go :: [DisplayInfo] -> Natural -> Gen [DisplayInfo]
         go acc 0 = pure (reverse acc)
         go acc n = do
-          newSpaces <- choose (1, 10)
+          newSpaces <- choose (1, 10)  -- Must be at least 1
           let index      = length acc + 1
               spaces     = concatMap dSpaces acc
               newIndices = take newSpaces [(length spaces + 1)..]
