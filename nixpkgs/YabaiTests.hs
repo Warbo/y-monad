@@ -78,6 +78,29 @@ tests = testGroup "All tests" [
                   want = take (length got) (map SIndex [1..])
                in got === want))
       ]
+      , testGroup "State generation" [
+      ]
+    ]
+  , testGroup "Test queries" [
+      testGroup "Primitive queries" [
+        testProperty "Can get displays"
+          (forAllQueryResults (getDisplays :: Q [DisplayInfo])
+            (\(init, final, displays) ->
+              displays === stateDisplays init .&&.
+              displays === stateDisplays final))
+
+      , testProperty "Can get spaces"
+          (forAllQueryResults (getSpaces :: Q [SpaceInfo])
+            (\(init, final, spaces) ->
+              spaces === stateSpaces init .&&.
+              spaces === stateSpaces final))
+
+      , testProperty "Can get windows"
+          (forAllQueryResults (getWindows :: Q [WindowInfo])
+            (\(init, final, windows) ->
+              windows === stateWindows init .&&.
+              windows === stateWindows final))
+      ]
     ]
   ]
   where forAllDisplays :: ForAll [DisplayInfo]
@@ -93,6 +116,11 @@ tests = testGroup "All tests" [
               pure (dis, sis))
           shrinkSpacesAndDisplays
 
+        forAllQueryResults :: Q a -> ForAll (WMState, WMState, a)
+        forAllQueryResults q f = forAllShrink arbitrary shrink
+          (\init -> let (final, result) = run (runState init (queryState q))
+                     in f (init, final, result))
+
 
 type ForAll a = forall prop. Testable prop => (a -> prop) -> Property
 
@@ -107,8 +135,8 @@ spaceIndices = concatMap dSpaces
 type Seed = Natural
 
 instance Arbitrary Natural where
-  arbitrary = fromIntegral <$> arbitrary @Int
-  shrink n  = fromIntegral <$> (shrink @Int (fromIntegral n))
+  arbitrary = fromIntegral . abs <$> arbitrary @Int
+  shrink n  = fromIntegral . abs <$> (shrink @Int (fromIntegral n))
 
 -- | The state of our window manager: displays, spaces and windows
 data WMState = State { stateDisplays :: [DisplayInfo]
@@ -117,16 +145,24 @@ data WMState = State { stateDisplays :: [DisplayInfo]
                      , stateSeeds    :: InfiniteList Seed
                      }
 
+instance Show WMState where
+  show s = concat [ "(WMState "
+                  , show (stateDisplays s), ", "
+                  , show (stateSpaces   s), ", "
+                  , show (stateWindows  s)
+                  , ")"
+                  ]
+
 chooseNat :: (Natural, Natural) -> Gen Natural
 chooseNat (min, max) = fromIntegral <$> choose @Int ( fromIntegral min
                                                     , fromIntegral max )
 
 genWMState :: Natural -> Gen WMState
 genWMState dCount = do
-    displays    <- genNDisplays dCount
-    spaces      <- genSpaces displays
-    windows     <- error "NO WINDOWS IMPLEMENTED"
-    seeds       <- arbitrary
+    displays <- genNDisplays dCount
+    spaces   <- genSpaces displays
+    windows  <- genWindows spaces
+    seeds    <- arbitrary
     pure (State { stateDisplays = displays
                 , stateSpaces   = spaces
                 , stateWindows  = windows
@@ -279,6 +315,29 @@ shrinkSpacesAndDisplays (dis, sis) =
           let arbitraryNum = product [length dis + 1, length sis + 1] +
                              (length dis' * length sis')
            in (dis', focusAndVisible arbitraryNum sis')
+
+genWindows :: [SpaceInfo] -> Gen [WindowInfo]
+genWindows sis = pickFocus (map mkWindow windows)
+  where windows :: [Window]
+        windows = concatMap sWindows sis
+
+        mkWindow :: Window -> WindowInfo
+        mkWindow w =
+          let space     = head (filter ((w `elem`) . sWindows) sis)
+           in WI { wWindow  = w
+                 , wDisplay = sDisplay space
+                 , wSpace   = sIndex   space
+                 , wVisible = sVisible space
+                 , wFocused = sFocused space -- Narrow down to one later
+                 }
+
+        pickFocus :: [WindowInfo] -> Gen [WindowInfo]
+        pickFocus ws =
+          let focusable = filter wFocused ws
+           in do f <- if null focusable
+                         then pure Nothing
+                         else Just . wWindow <$> elements focusable
+                 pure (map (\w -> w { wFocused = Just (wWindow w) == f }) ws)
 
 focusAndVisible :: Int -> [SpaceInfo] -> [SpaceInfo]
 focusAndVisible _ []  = error "Can't have no spaces"

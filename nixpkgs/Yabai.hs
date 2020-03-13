@@ -68,6 +68,8 @@ showSpace = either show show
 --   usually preferable to use a 'SpaceLabel' instead.
 newtype SpaceIndex = SIndex Natural deriving (Eq)
 
+unSIndex (SIndex i) = i
+
 instance Num SpaceIndex where
   fromInteger = SIndex . fromInteger
 
@@ -144,7 +146,7 @@ data SpaceInfo = SI { sLabel   :: Maybe SpaceLabel
                     , sWindows :: [Window]
                     , sVisible :: Bool
                     , sFocused :: Bool
-                    } deriving (Show)
+                    } deriving (Eq, Show)
 
 instance FromJSON SpaceInfo where
   parseJSON = withObject "SpaceInfo" $ \o -> do
@@ -170,7 +172,7 @@ data WindowInfo = WI { wWindow  :: Window
                      , wSpace   :: SpaceIndex
                      , wVisible :: Bool
                      , wFocused :: Bool
-                     }
+                     } deriving (Eq, Show)
 
 instance FromJSON WindowInfo where
   parseJSON = withObject "WindowInfo" $ \o -> do
