@@ -35,6 +35,9 @@ tests = testGroup "State tests" [
                      want = map (DID . fromIntegral) [1..length dis]
                   in got === want))
 
+  , testProperty "Generated displays have at least one space each"
+      (forAllShrink (chooseNat (1, 20) >>= genDisplays) shrinkDisplays
+        (all (not . null . dSpaces)))
   ]
 
 --prop_mkSpaceExists
