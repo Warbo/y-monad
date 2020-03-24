@@ -520,7 +520,7 @@ labelSpaces = do spaces <- getSpaces
 
 -- The space labels we want will get spliced in here during the build
 spaceLabels :: [SpaceLabel]
-spaceLabels = LABELS_GO_HERE
+spaceLabels = undefined -- LABELS_GO_HERE
 
 commandToYabaiArgs :: Command m a -> [String]
 commandToYabaiArgs c = "-m" : case c of
