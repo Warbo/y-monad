@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedLists     #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE RankNTypes          #-}
@@ -17,110 +18,126 @@
 
 module Main where
 
-import Data.Maybe (isJust)
-import Data.List (nub)
-import Numeric.Natural (Natural)
-import Polysemy
-import Polysemy.State
-import Test.QuickCheck
-import Test.Tasty
-import Test.Tasty.QuickCheck
-import Yabai
+import           Data.List (intercalate, nub)
+import           GHC.Exts (IsList (..))
+import           Numeric.Natural (Natural)
+import           Polysemy
+import           Polysemy.State
+import           Test.QuickCheck
+import           Test.Tasty
+import           Test.Tasty.QuickCheck
+import           Yabai
 
 main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "All tests" [
-    testGroup "Tests of stateful interpreter" [
-      testGroup "Display generation" [
-        testProperty "Generated displays count upwards"
-          (forAllDisplays (\dis ->
-            let got  = map dDisplay             dis
-                want = map (DID . fromIntegral) [1..length dis]
-             in got === want))
+    testGroup "Test that stateful interpreter works" [
+      testProperty "Generated displays count upwards"
+        (forAllDisplays (\dis ->
+          let got  = map dDisplay             dis
+              want = map (DID . fromIntegral) [1..length dis]
+           in got === want))
 
-      , testProperty "Generated displays have at least one space each"
-          (forAllDisplays
-            (all (not . null . dSpaces)))
+    , testProperty "Generated displays have at least one space each"
+        (forAllDisplays (\dis ->
+          (all (not . null . dSpaces) dis)))
 
-      , testProperty "Generated displays have space indices counting up"
-          (forAllDisplays (\dis ->
-            let got  = concatMap dSpaces dis
-                want = map SIndex (take (length got) [1..])
-             in got === want))
-      ]
-      , testGroup "Space generation" [
-          testProperty "Generate correct number of spaces"
-            (forAllDisplaySpaces (\(dis, sis) ->
-              let want = sum (map (length . dSpaces) dis)
-               in length sis === want))
+    , testProperty "Generated displays have space indices counting up"
+        (forAllDisplays (\dis ->
+          let got  = concatMap dSpaces dis
+              want = map SIndex (take (length got) [1..])
+           in got === want))
 
-        , testProperty "Generate correct space indices"
-            (forAllDisplaySpaces (\(dis, sis) ->
-              let want = concatMap dSpaces dis
-                  got  = map sIndex sis
-               in got === want))
+    , testProperty "Generate correct number of spaces"
+        (forAllDisplaySpaces (\(dis, sis) ->
+          let want = sum (map (length . dSpaces) dis)
+           in length sis === want))
 
-        , testProperty "Spaces have correct displays"
-            (forAllDisplaySpaces (\(dis, sis) ->
-              let onDisplay di si = sIndex si `elem` dSpaces di
+    , testProperty "Generate correct space indices"
+        (forAllDisplaySpaces (\(dis, sis) ->
+          let want = concatMap dSpaces dis
+              got  = map sIndex sis
+           in got === want))
 
-                  checkDisplay di = let spaces = filter (onDisplay di) sis
-                                     in conjoin
-                                          (map ((=== dDisplay di) . sDisplay)
-                                               spaces)
+    , testProperty "Spaces have correct displays"
+        (forAllDisplaySpaces (\(dis, sis) ->
+          let onDisplay di si = sIndex si `elem` dSpaces di
 
-               in conjoin (map checkDisplay dis)))
+              checkDisplay di = let spaces = filter (onDisplay di) sis
+                                 in conjoin
+                                      (map ((=== dDisplay di) . sDisplay)
+                                           spaces)
 
-        , testProperty "Space indices count up"
-            (forAllSpaces (\sis ->
-              let got  =                    map sIndex sis
-                  want = take (length got) (map SIndex [1..])
-               in got === want))
-      ]
-      , testGroup "State generation" [
-      ]
+           in conjoin (map checkDisplay dis)))
+
+    , testProperty "Space indices count up"
+        (forAllSpaces (\sis ->
+          let got  =                    map sIndex sis
+              want = take (length got) (map SIndex [1..])
+           in got === want))
+
+    , testProperty "Windows are unique"
+        (forAllWindows (\ws ->
+          let wids = map wWindow ws
+           in nub wids === wids))
     ]
   , testGroup "Test queries" [
       testGroup "Primitive queries" [
         testProperty "Can get displays"
-          (forAllQueryResults (getDisplays :: Q [DisplayInfo])
-            (\(init, final, displays) ->
-              displays === stateDisplays init .&&.
-              displays === stateDisplays final))
+          (forAllQ (getDisplays :: Q r [DisplayInfo]) (\(i, s, displays) ->
+            i === s .&&. not (null displays)))
 
       , testProperty "Can get spaces"
-          (forAllQueryResults (getSpaces :: Q [SpaceInfo])
-            (\(init, final, spaces) ->
-              spaces === stateSpaces init .&&.
-              spaces === stateSpaces final))
+          (forAllQ (getSpaces :: Q r [SpaceInfo]) (\(i, s, spaces) ->
+            i === s .&&. not (null spaces)))
 
       , testProperty "Can get windows"
-          (forAllQueryResults (getWindows :: Q [WindowInfo])
-            (\(init, final, windows) ->
-              windows === stateWindows init .&&.
-              windows === stateWindows final))
+          (forAllQ (getWindows :: Q r [WindowInfo]) (\(i, s, windows) ->
+            i === s .&&. length windows >= 0))
+      ]
+    , testGroup "Compound queries" [
+        testProperty "displayCount matches state"
+          (forAllQ (displayCount :: Q r Natural) (\(_, s, dCount) ->
+            dCount === (fromIntegral . length . stateDisplays $ s)))
+
+      , testProperty "pluggedIn counts displays"
+          (forAllQ (pluggedIn) (\(_, s, p) ->
+            (length (stateDisplays s) > 1) === p))
       ]
     ]
   ]
   where forAllDisplays :: ForAll [DisplayInfo]
-        forAllDisplays = forAllShrink genDisplays shrinkDisplays
+        forAllDisplays = forAllStateful testDisplays
 
         forAllSpaces :: ForAll [SpaceInfo]
-        forAllSpaces = forAllShrink (genDisplays >>= genSpaces) shrinkSpaces
+        forAllSpaces = forAllStateful testStateSpaces
 
         forAllDisplaySpaces :: ForAll ([DisplayInfo], [SpaceInfo])
-        forAllDisplaySpaces = forAllShrink
-          (do dis <- genDisplays
-              sis <- genSpaces dis
-              pure (dis, sis))
-          shrinkSpacesAndDisplays
+        forAllDisplaySpaces = forAllStateful
+          (\s -> (testDisplays s, testStateSpaces s))
 
-        forAllQueryResults :: Q a -> ForAll (WMState, WMState, a)
-        forAllQueryResults q f = forAllShrink arbitrary shrink
+        forAllWindows :: ForAll [WindowInfo]
+        forAllWindows = forAllStateful testStateWindows
+
+        -- | If our test inputs are derived from a 'WMState', we can generate
+        --   and shrink the state, then re-derive the test inputs.
+        forAllFromState :: Show a => (WMState -> a) -> ForAll (WMState, a)
+        forAllFromState f = forAllShrink (do s <- arbitrary
+                                             pure (s, f s))
+                                         (\(s, _) -> map (\s -> (s, f s))
+                                                         (shrink s))
+
+        -- | Generates and shrinks a 'WMState', but applies the given function
+        --   to it to derive the property's input.
+        forAllStateful :: Show a => (WMState -> a) -> ForAll a
+        forAllStateful f prop = forAllFromState f (prop . snd)
+
+        forAllQ :: Sem (Query ': State WMState ': '[]) a
+                -> ForAll (WMState, WMState, a)
+        forAllQ q f = forAllShrink arbitrary shrink
           (\init -> let (final, result) = run (runState init (queryState q))
                      in f (init, final, result))
-
 
 type ForAll a = forall prop. Testable prop => (a -> prop) -> Property
 
@@ -138,245 +155,295 @@ instance Arbitrary Natural where
   arbitrary = fromIntegral . abs <$> arbitrary @Int
   shrink n  = fromIntegral . abs <$> (shrink @Int (fromIntegral n))
 
--- | The state of our window manager: displays, spaces and windows
-data WMState = State { stateDisplays :: [DisplayInfo]
-                     , stateSpaces   :: [  SpaceInfo]
-                     , stateWindows  :: [ WindowInfo]
-                     , stateSeeds    :: InfiniteList Seed
-                     }
+-- We don't want redundancy in our test state, so we try to calculate each field
+-- of the required 'DisplayInfo', 'SpaceInfo' and 'WindowInfo' queries from a
+-- single source of truth.
 
+-- | A non-empty zipper; that is, a non-empty list with one element "focused"
+data NEZipper a = Z [a] a [a] deriving (Eq)
+
+instance Show a => Show (NEZipper a) where
+  show (Z xs y zs) = wrap "[" "]"
+    (intercalate ", " (wrap (map show (reverse xs))
+                            (map show zs)
+                            [wrap "{" "}" (show y)]))
+
+instance Foldable NEZipper where
+  foldMap f (Z xs y zs) = foldMap f (reverse xs) <> f y <> foldMap f zs
+
+wrap pre post s = pre ++ s ++ post
+
+instance Arbitrary a => Arbitrary (NEZipper a) where
+  arbitrary = Z <$> arbitrary <*> arbitrary <*> arbitrary
+
+  shrink (Z xs y zs) = map (\(xs, y, zs) -> Z xs y zs)
+                           (shrink (xs, y, zs))
+
+instance IsList (NEZipper a) where
+  type Item (NEZipper a) = a
+
+  fromList []     = error "NEZipper can't be empty"
+  fromList (y:zs) = Z [] y zs
+
+  toList (Z xs y zs) = reverse xs ++ [y] ++ zs
+
+instance Functor NEZipper where
+  fmap f (Z xs y zs) = Z (map f xs) (f y) (map f zs)
+
+mapIndex :: (a -> Natural -> b) -> NEZipper a -> NEZipper b
+mapIndex f (Z xs y zs) = let len = fromIntegral (length xs)
+                          in Z (zipWith f xs [len..1])
+                               (f y (len + 1))
+                               (zipWith f zs [len+1..])
+
+-- | A 'Display' in our test state is a non-empty zipper of 'Space's, where the
+--   "focus" is the visible 'Space'
+type TestDisplay = NEZipper TestSpace
+
+-- | A pure window manager state, for testing queries and commands
+data WMState = State {
+    -- The top-level list's elements represent a 'Display', with one of them
+    -- focused. The inner lists' elements represent a 'Space', with one of them
+    -- visible. The visible 'Space' on the focused 'Display' is focused.
+    stateDisplays :: NEZipper TestDisplay
+
+    -- These can be used whenever an otherwise-pure operation needs to make a
+    -- decision
+  , stateSeeds  :: InfiniteList Seed
+  }
+
+-- | A 'Space' in our test state is either a non-empty zipper of 'Window's (with
+--   the "focused" element being the focused 'Window'), or 'Nothing' if there is
+--   no 'Window' on the 'Space'.
+data TestSpace = TS { testLabel   :: Maybe SpaceLabel
+                    , testWindows :: Maybe (NEZipper Window)
+                    } deriving (Eq, Show)
+
+instance Arbitrary TestSpace where
+  arbitrary = TS <$> arbitrary
+                 <*> arbitrary `suchThat` (\mws -> uniq (toList <$> mws))
+  shrink ts =    map (\(l, mws) -> TS { testLabel = l, testWindows = mws }) .
+              filter (\(_, mws) -> uniq (toList <$> mws))                   .
+              shrink $ (testLabel ts, testWindows ts)
+
+uniq :: Ord a => Maybe [a] -> Bool
+uniq ml = case ml of
+  Nothing -> True
+  Just l  -> nub l == l
+
+instance Arbitrary SpaceLabel where
+  arbitrary = SLabel <$> arbitrary `suchThat` (/= "")
+  shrink (SLabel s) = map SLabel . filter (/= "") . shrink $ s
+
+instance Arbitrary Window where
+  arbitrary = WID <$> arbitrary
+  shrink (WID n) = map WID (shrink n)
+
+-- | Don't try to show an 'InfiniteList'
 instance Show WMState where
-  show s = concat [ "(WMState "
-                  , show (stateDisplays s), ", "
-                  , show (stateSpaces   s), ", "
-                  , show (stateWindows  s)
-                  , ")"
-                  ]
+  show s = show (stateDisplays s)
+
+-- | We don't care about the remaining random seeds
+instance Eq WMState where
+  s1 == s2 = stateDisplays s1 == stateDisplays s2
+
+testStateWindows :: WMState -> [WindowInfo]
+testStateWindows state = case stateDisplays state of
+    Z xs y zs -> inc (DID 1) (map (unFoc,  )  (reverse xs) ++
+                              [   (isFoc, y)]              ++
+                              map (unFoc,  )           zs)
+  where inc :: Display -> [(Focused, TestDisplay)] -> [WindowInfo]
+        inc _        []            = []
+        inc (DID di) ((foc, d):ds) = map (fix (DID di))
+                                         (testSpaceWindows foc d) ++
+                                     inc (DID (di+1)) ds
+
+        fix = error "UNDEFINED fix"
+
+{-
+testDisplayWindows :: [(Visible, TestDisplay)]
+testDisplayWindows = concat [ map (invis,  ) (reverse xs)
+                            ,     (isVis, y)
+                            , map (invis,  )          zs
+                            ]
+-}
+
+testSpaceWindows :: Focused
+                 -> NEZipper TestSpace
+                 -> [(Visible, Focused, TestSpace)]
+testSpaceWindows f (Z as b cs) = concat xs
+  where xs :: [[(Visible, Focused, TestSpace)]]
+        xs = [ map (invis, unFoc,) (reverse as)
+             , [   (isVis, f    ,           b)]
+             , map (invis, unFoc,)          cs
+             ]
 
 chooseNat :: (Natural, Natural) -> Gen Natural
 chooseNat (min, max) = fromIntegral <$> choose @Int ( fromIntegral min
-                                                    , fromIntegral max )
+                                                    , fromIntegral max
+                                                    )
 
 genWMState :: Natural -> Gen WMState
 genWMState dCount = do
-    displays <- genNDisplays dCount
-    spaces   <- genSpaces displays
-    windows  <- genWindows spaces
-    seeds    <- arbitrary
-    pure (State { stateDisplays = displays
-                , stateSpaces   = spaces
-                , stateWindows  = windows
+    s     <- arbitrary `suchThat` (enough . stateDisplays)
+    ds    <- dropDisplays (stateDisplays s)
+    seeds <- arbitrary
+    pure (State { stateDisplays = ds
                 , stateSeeds    = seeds
                 })
 
--- | Generate a list of consistent 'DisplayInfo' entries (i.e. their 'dSpaces'
---   indices count up from 1)
-genNDisplays :: Natural -> Gen [DisplayInfo]
-genNDisplays = go []
-  where go :: [DisplayInfo] -> Natural -> Gen [DisplayInfo]
-        go acc 0 = pure (reverse acc)
-        go acc n = do
-          newSpaces <- choose (1, 10)  -- Must be at least 1
-          let index      = length acc + 1
-              spaces     = concatMap dSpaces acc
-              newIndices = take newSpaces [(length spaces + 1)..]
-              display    = DI { dDisplay = DID (fromIntegral index)
-                              , dSpaces  = map (SIndex . fromIntegral)
-                                               newIndices
-                              }
-          go (display:acc) (n-1)
+  where countDisplays = fromIntegral . length . toList
 
-genDisplays :: Gen [DisplayInfo]
-genDisplays = chooseNat (1, 20) >>= genNDisplays
+        enough  = (>= dCount) . countDisplays
 
--- | Shrink function to simplify counterexamples, used with 'forAllShrink'. Note
---   that we don't make an 'Arbitrary' instance since it would overlap with the
---   generic 'Arbitrary a => Arbitrary [a]' instance.
-shrinkDisplays :: [DisplayInfo] -> [[DisplayInfo]]
-shrinkDisplays dis = concat [
-      if length dis > 1 then [take 1 dis, fixIndices (drop 1 dis)] else []
-    , if dropped == dis then [] else [dropped]
-    ]
-  where dropped = fixIndices (dropSpaces [] dis)
+        tooMany = (>  dCount) . countDisplays
 
-        fixIndices = let nextDID       = DID . fromIntegral . (+1) . length
-                         nextDI acc ss = DI { dDisplay = nextDID acc
-                                            , dSpaces  = map (inc acc) [1..ss]
-                                            }
-                         inc acc       = SIndex       .
-                                         fromIntegral .
-                                         (+ length (concatMap dSpaces acc))
+        dropDisplays ds@(Z xs y zs) =
+          if tooMany ds
+             then do fromStart <- arbitrary
+                     if fromStart
+                        then dropDisplays (Z (drop 1 xs) y         zs )
+                        else dropDisplays (Z         xs  y (drop 1 zs))
+             else pure ds
 
-                         fixDI acc d   = nextDI acc (length (dSpaces d))
+testDisplays :: WMState -> [DisplayInfo]
+testDisplays s = go (DID 1) (SIndex 1) (toList (stateDisplays s))
+  where go (DID di) (SIndex si) ds = case ds of
+          []    -> []
+          d:ds' -> let len = length (toList d)
+                    in DI { dDisplay = DID di
+                          , dSpaces  = map SIndex (take len [si..])
+                          } : go (DID (di+1))
+                                 (SIndex (si + fromIntegral len))
+                                 ds'
 
-                         go acc []     = reverse acc
-                         go acc (d:ds) = go (fixDI acc d:acc) ds
-                      in go []
+testSpaces :: SpaceIndex -> Display -> Focused -> TestDisplay -> [SpaceInfo]
+testSpaces (SIndex i) d focused td = case td of
+    Z xs y zs -> let i' = i + fromIntegral (length xs)
+                  in zipWith (space invis) [i   ..] (reverse xs) ++
+                     [        space isVis   i'               y ] ++
+                     zipWith (space invis) [i'+1..]          zs
+  where space visible index ts = SI {
+            sLabel   = testLabel ts
+          , sIndex   = SIndex index
+          , sDisplay = d
+          , sWindows = maybe [] toList (testWindows ts)
+          , sVisible = visible
+          , sFocused = F (unV visible && unF focused)
+          }
 
-        dropSpaces acc []     = reverse acc
-        dropSpaces acc (d:ds) =
-          let spaces    = dSpaces d
-              sCount    = length spaces
-              newCount  = sCount `div` 2
-              newSpaces = if null spaces
-                             then spaces
-                             else if even (length acc)
-                                     then take newCount spaces
-                                     else drop newCount spaces
-           in dropSpaces (d { dSpaces = newSpaces }:acc) ds
+testStateSpaces :: WMState -> [SpaceInfo]
+testStateSpaces s = case stateDisplays s of
+    Z xs y zs -> let l :: [[(Focused, TestDisplay)]]
+                     l = [ map (unFoc,) (reverse xs)
+                         , [   (isFoc,           y)]
+                         , map (unFoc,)          zs
+                         ]
+                  in go 1 1 (concat l)
+  where go di si ds = case ds of
+          []               -> []
+          (foc, d):ds' -> let spaces = testSpaces (SIndex si) (DID di) foc d
+                           in spaces ++ go (di + 1)
+                                           (si + fromIntegral (length spaces))
+                                           ds'
 
--- | Generate a list of 'SpaceInfo' entries, consistent with the given
---   'DisplayInfo' entries.
-genSpaces :: [DisplayInfo] -> Gen [SpaceInfo]
-genSpaces = go []
-  where go :: [SpaceInfo] -> [DisplayInfo] -> Gen [SpaceInfo]
-        go acc []       = do n <- arbitrary
-                             pure (focusAndVisible n (reverse acc))
-        go acc (di:dis) = do spaces <- genForDisplay di
-                             go (reverse spaces ++ acc) dis
+testWindowInfos :: Display -> SpaceIndex -> Visible -> Focused -> [WindowInfo]
+testWindowInfos _ _ _ _ {--d s vis foc-} = error "UNDEFINED testWindowInfos"
 
-        genForDisplay :: DisplayInfo -> Gen [SpaceInfo]
-        genForDisplay di = mapM (genSpace (dDisplay di)) (dSpaces di)
+genList :: (Natural -> Gen a) -> Natural -> Gen [a]
+genList _ 0 = pure []
+genList g n = do n' <- chooseNat (1, n)
+                 x  <- g n'
+                 (x:) <$> genList g (n - n')
 
-        genSpace :: Display -> SpaceIndex -> Gen SpaceInfo
-        genSpace d i = do
-          label   <- genMaybeLabel
-          windows <- map WID <$> arbitrary
-          pure $
-            SI { sLabel   = label
-               , sIndex   = i
-               , sDisplay = d
-               , sWindows = windows
-               , sVisible = False  -- Default; may be replaced before returning
-               , sFocused = False  -- Default; may be replaced before returning
-               }
+genNEZipper :: (Natural -> Gen a) -> Natural -> Gen (NEZipper a)
+genNEZipper g 0 = (\y -> Z [] y []) <$> g 0
+genNEZipper g n = do yn <- case n of
+                             0 -> pure 0
+                             m -> chooseNat (1, m)
+                     xn <- case n - yn of
+                             0 -> pure 0
+                             m -> chooseNat (1, m)
+                     zn <- case n - yn - xn of
+                             0 -> pure 0
+                             m -> chooseNat (1, m)
 
-shrinkSpaces :: [SpaceInfo] -> [[SpaceInfo]]
-shrinkSpaces sis = concat [
-    -- Try to discard a 'Display', since that's a big simplification
-    if length displays > 1 then map dropDisplay displays else []
-
-    -- Try to discard a 'Space', since that's pretty major
-  , if length sis > length displays then concatMap dropSpace sis else []
-
-    -- Last resort, see if we can discard a 'Window'
-  , if null windows then [] else map dropWindow windows
-  ]
-  where dropDisplay :: Display -> [SpaceInfo]
-        dropDisplay d = makeConsistent (filter ((/= d) . sDisplay) sis)
-
-        -- We might be unable to remove a space (if it's the only one on a
-        -- display); we return [] in that case
-        dropSpace :: SpaceInfo -> [[SpaceInfo]]
-        dropSpace s =
-          let i   = sIndex s
-              d   = sDisplay s
-              onD = filter ((== d) . sDisplay) sis
-           in if null onD
-                 then []
-                 else [makeConsistent (filter ((/= i) . sIndex) sis)]
-
-        dropWindow :: Window -> [SpaceInfo]
-        dropWindow w =
-          let dropW w si = si { sWindows = filter (/= w) (sWindows si) }
-           in map (dropW w) sis
-
-        displays = nub (map sDisplay sis)
-
-        windows  = concatMap sWindows sis
-
-        makeConsistent =
-          focusAndVisible (length sis + 123) .
-          zipWith (\i si -> si { sIndex = SIndex i }) [1..]
-
-
--- | Shrink '([DisplayInfo], [SpaceInfo])' whilst maintaining their consistency.
---   In particular:
---    - We keep at least one 'Display'
---    - We keep at least one 'Space' per 'Display'
---    - When a 'DisplayInfo' is discarded, so are any corresponding 'SpaceInfo'
---    - There will always be exactly one visible 'Space' per 'Display'
---    - There will always be exactly one focused 'Space' among the visible
-shrinkSpacesAndDisplays (dis, sis) =
-    map pickVis
-        (filter nonEmpty
-                (map (\dis' -> (dis', fixSpaces dis'))
-                     (shrinkDisplays dis)))
-  where fixSpaces :: [DisplayInfo] -> [SpaceInfo]
-        fixSpaces dis' = filter
-          (\si -> sIndex   si `elem` concatMap dSpaces  dis' &&
-                  sDisplay si `elem`       map dDisplay dis')
-          sis
-
-        nonEmpty :: ([a], [b]) -> Bool
-        nonEmpty (dis', sis') = not (null dis') && not (null sis')
-
-        pickVis (dis', sis') =
-          let arbitraryNum = product [length dis + 1, length sis + 1] +
-                             (length dis' * length sis')
-           in (dis', focusAndVisible arbitraryNum sis')
-
-genWindows :: [SpaceInfo] -> Gen [WindowInfo]
-genWindows sis = pickFocus (map mkWindow windows)
-  where windows :: [Window]
-        windows = concatMap sWindows sis
-
-        mkWindow :: Window -> WindowInfo
-        mkWindow w =
-          let space     = head (filter ((w `elem`) . sWindows) sis)
-           in WI { wWindow  = w
-                 , wDisplay = sDisplay space
-                 , wSpace   = sIndex   space
-                 , wVisible = sVisible space
-                 , wFocused = sFocused space -- Narrow down to one later
-                 }
-
-        pickFocus :: [WindowInfo] -> Gen [WindowInfo]
-        pickFocus ws =
-          let focusable = filter wFocused ws
-           in do f <- if null focusable
-                         then pure Nothing
-                         else Just . wWindow <$> elements focusable
-                 pure (map (\w -> w { wFocused = Just (wWindow w) == f }) ws)
-
-focusAndVisible :: Int -> [SpaceInfo] -> [SpaceInfo]
-focusAndVisible _ []  = error "Can't have no spaces"
-focusAndVisible n sis = map modify sis
-  where displays   = nub (map sDisplay sis)
-
-        spacesOn d = map sIndex (filter ((== d) . sDisplay) sis)
-
-        visible    = map (\d -> let spaces = spacesOn d
-                                 in spaces !! (n `mod` length spaces))
-                         displays
-
-        focus      = visible !! (n `mod` length displays)
-
-        modify si  = si { sFocused = sIndex si ==     focus
-                        , sVisible = sIndex si `elem` visible
-                        }
-
-genMaybeLabel :: Gen (Maybe SpaceLabel)
-genMaybeLabel = do s <- arbitrary
-                   pure (if s == "" then Nothing else Just (SLabel s))
-
-shrinkMaybeLabel :: Maybe SpaceLabel -> [Maybe SpaceLabel]
-shrinkMaybeLabel Nothing           = []
-shrinkMaybeLabel (Just (SLabel l)) = Nothing : filter isJust (map go (shrink l))
-  where go "" = Nothing
-        go x  = Just (SLabel x)
+                     xs <- genList g xn
+                     y  <-         g yn
+                     zs <- genList g zn
+                     pure (Z xs y zs)
 
 instance Arbitrary WMState where
-  arbitrary = do
-    dCount <- chooseNat (1, 10)
-    genWMState dCount
+  arbitrary = let genD :: Natural -> Gen TestDisplay
+                  genD = genNEZipper genS
+
+                  genS :: Natural -> Gen TestSpace
+                  genS n = do label <- arbitrary  -- No recursion, no fuel needed
+                              ws    <- case n of
+                                0 -> pure Nothing
+                                _ -> Just <$> genNEZipper (const arbitrary) n
+                              pure TS {
+                                testLabel   = label
+                              , testWindows = ws
+                              }
+
+                  -- | Renumber any 'Window' that we've seen before
+                  uniqueDisplaysWindows :: [Natural]
+                                        -> NEZipper TestDisplay
+                                        -> NEZipper TestDisplay
+                  uniqueDisplaysWindows seen =
+                    snd . uniqueZipper uniqueDisplayWindows seen
+
+                  uniqueZipper :: ([Natural] -> a -> ([Natural], a))
+                               -> [Natural]
+                               -> NEZipper a
+                               -> ([Natural], NEZipper a)
+                  uniqueZipper f seen (Z xs y zs) =
+                    let (seen'  , xs') = uniqueList f seen  xs
+                        (seen'' , zs') = uniqueList f seen' zs
+                        (seen''', y' ) = f seen'' y
+                     in (seen''', Z xs' y' zs')
+
+                  uniqueList _ seen []     = (seen, [])
+                  uniqueList f seen (x:xs) =
+                    let (seen' , x' ) = f seen x
+                        (seen'', xs') = uniqueList f seen' xs
+                     in (seen'', x':xs')
+
+                  uniqueDisplayWindows :: [Natural]
+                                       -> TestDisplay
+                                       -> ([Natural], TestDisplay)
+                  uniqueDisplayWindows = uniqueZipper uniqueSpaceWindows
+
+                  uniqueSpaceWindows :: [Natural]
+                                     -> TestSpace
+                                     -> ([Natural], TestSpace)
+                  uniqueSpaceWindows seen s = case testWindows s of
+                    Nothing -> (seen, s)
+                    Just ws -> case uniqueZipper uniqueWindow seen ws of
+                      (seen', ws') -> (seen', s { testWindows = Just ws' })
+
+                  uniqueWindow :: [Natural] -> Window -> ([Natural], Window)
+                  uniqueWindow seen (WID w) =
+                    if w `elem` seen
+                       then uniqueWindow seen (WID (w+1))
+                       else (w:seen, WID w)
+
+               in do seeds <- arbitrary
+                     size  <- getSize
+                     ds    <- genNEZipper genD (fromIntegral (abs size))
+                     pure (State (uniqueDisplaysWindows [] ds) seeds)
+
+  shrink s = map (\ds -> s { stateDisplays = ds })
+                 (shrink (stateDisplays s))
 
 queryState :: Member (State WMState) r => Sem (Query ': r) a -> Sem r a
 queryState = interpret query
   where query :: Member (State WMState) r => Query m a -> Sem r a
-        query GetDisplays = stateDisplays <$> get
-        query GetSpaces   = stateSpaces   <$> get
-        query GetWindows  = stateWindows  <$> get
+        query q = case q of
+          GetDisplays -> testDisplays     <$> get
+          GetSpaces   -> testStateSpaces  <$> get
+          GetWindows  -> testStateWindows <$> get
 
 {-
 commandState :: Member (State WMState) r => Sem (Command ': r) a -> Sem r a
@@ -422,6 +489,6 @@ mkSpace (s1, s2, s3, s4) sIndices =
          , sIndex   = SIndex (fromIntegral index)
          , sDisplay = DID (fromIntegral (display + 1))
          , sWindows = []
-         , sVisible = even s3
-         , sFocused = even s4
+         , sVisible = V (even s3)
+         , sFocused = F (even s4)
          }
