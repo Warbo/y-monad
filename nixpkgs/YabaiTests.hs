@@ -103,7 +103,9 @@ tests = testGroup "All tests" [
 
       , testProperty "pluggedIn counts displays"
           (forAllQ (pluggedIn) (\(_, s, p) ->
-            (length (stateDisplays s) > 1) === p))
+            let len = length (stateDisplays s)
+             in counterexample (show ("len", len, "p", p)) $
+                (len == 2) === p))
       ]
     ]
   ]
@@ -248,35 +250,53 @@ instance Eq WMState where
   s1 == s2 = stateDisplays s1 == stateDisplays s2
 
 testStateWindows :: WMState -> [WindowInfo]
-testStateWindows state = case stateDisplays state of
-    Z xs y zs -> inc (DID 1) (map (unFoc,  )  (reverse xs) ++
-                              [   (isFoc, y)]              ++
-                              map (unFoc,  )           zs)
-  where inc :: Display -> [(Focused, TestDisplay)] -> [WindowInfo]
-        inc _        []            = []
-        inc (DID di) ((foc, d):ds) = map (fix (DID di))
-                                         (testSpaceWindows foc d) ++
-                                     inc (DID (di+1)) ds
+testStateWindows state = map windowInfo windows
 
-        fix = error "UNDEFINED fix"
+  where focusedDisplays :: [(Focused, TestDisplay)]
+        focusedDisplays = case stateDisplays state of
+          Z xs y zs -> map (unFoc,  ) (reverse xs) ++
+                       [   (isFoc, y)            ] ++
+                       map (unFoc,  )          zs
 
-{-
-testDisplayWindows :: [(Visible, TestDisplay)]
-testDisplayWindows = concat [ map (invis,  ) (reverse xs)
-                            ,     (isVis, y)
-                            , map (invis,  )          zs
-                            ]
--}
+        numberedDisplays :: [(Display, Focused, TestDisplay)]
+        numberedDisplays = zipWith (\(foc, d) n -> (DID n, foc, d))
+                                   focusedDisplays
+                                   [1..]
 
-testSpaceWindows :: Focused
-                 -> NEZipper TestSpace
-                 -> [(Visible, Focused, TestSpace)]
-testSpaceWindows f (Z as b cs) = concat xs
-  where xs :: [[(Visible, Focused, TestSpace)]]
-        xs = [ map (invis, unFoc,) (reverse as)
-             , [   (isVis, f    ,           b)]
-             , map (invis, unFoc,)          cs
-             ]
+        visibleSpaces :: [(Display, Focused, Visible, TestSpace)]
+        visibleSpaces = concatMap
+          (\(d, f, Z xs y zs) ->
+            let notVis s = (d, f, invis, s)
+             in map notVis (reverse xs) ++
+                [(d, f, isVis, y)]      ++
+                map notVis          zs)
+          numberedDisplays
+
+        numberedSpaces :: [(SpaceIndex, Display, Focused, Visible, TestSpace)]
+        numberedSpaces = zipWith (\(d, f, v, ts) n -> (SIndex n, d, f, v, ts))
+                                 visibleSpaces
+                                 [1..]
+
+        windows :: [(SpaceIndex, Display, Focused, Visible, Window)]
+        windows = concatMap
+          (\(si, d, f, v, ts) -> case testWindows ts of
+            Nothing          -> []
+            Just (Z xs y zs) ->
+              let notVis w = (si, d, unFoc, v, w)
+               in map notVis (reverse xs) ++
+                  [(si, d, f, v, y)]      ++
+                  map notVis          zs)
+          numberedSpaces
+
+        windowInfo :: (SpaceIndex, Display, Focused, Visible, Window)
+                   -> WindowInfo
+        windowInfo (si, d, f, v, w) = WI {
+          wWindow  = w
+        , wDisplay = d
+        , wSpace   = si
+        , wVisible = v
+        , wFocused = f
+        }
 
 chooseNat :: (Natural, Natural) -> Gen Natural
 chooseNat (min, max) = fromIntegral <$> choose @Int ( fromIntegral min
