@@ -136,6 +136,14 @@ instance FromJSON DisplayInfo where
              , dSpaces  = map SIndex ss
              })
 
+newtype Visible = V { unV :: Bool } deriving (Eq, Show)
+isVis = V True
+invis = V False
+
+newtype Focused = F { unF :: Bool } deriving (Eq, Show)
+isFoc = F True
+unFoc = F False
+
 -- | A 'Space' always has a 'SpaceIndex' and a 'Display', may be assigned a
 --   'SpaceLabel' and can contain any number of 'Window' values. Each 'Display'
 --   contains exactly one visible 'Space', and there is always exactly one
@@ -144,8 +152,8 @@ data SpaceInfo = SI { sLabel   :: Maybe SpaceLabel
                     , sIndex   :: SpaceIndex
                     , sDisplay :: Display
                     , sWindows :: [Window]
-                    , sVisible :: Bool
-                    , sFocused :: Bool
+                    , sVisible :: Visible
+                    , sFocused :: Focused
                     } deriving (Eq, Show)
 
 instance FromJSON SpaceInfo where
@@ -160,8 +168,8 @@ instance FromJSON SpaceInfo where
              , sIndex   = SIndex i
              , sDisplay = DID d
              , sWindows = map WID ws
-             , sVisible = v == (1 :: Int)
-             , sFocused = f == (1 :: Int)
+             , sVisible = V (v == (1 :: Int))
+             , sFocused = F (f == (1 :: Int))
              })
 
 -- | A 'Window' lives on a 'Space', and the 'Display' of that 'Space' is
@@ -170,8 +178,8 @@ instance FromJSON SpaceInfo where
 data WindowInfo = WI { wWindow  :: Window
                      , wDisplay :: Display
                      , wSpace   :: SpaceIndex
-                     , wVisible :: Bool
-                     , wFocused :: Bool
+                     , wVisible :: Visible
+                     , wFocused :: Focused
                      } deriving (Eq, Show)
 
 instance FromJSON WindowInfo where
@@ -184,8 +192,8 @@ instance FromJSON WindowInfo where
     pure (WI { wWindow  = WID i
              , wDisplay = DID d
              , wSpace   = SIndex s
-             , wVisible = v == (1 :: Int)
-             , wFocused = f == (1 :: Int)
+             , wVisible = V (v == (1 :: Int))
+             , wFocused = F (f == (1 :: Int))
              })
 
 -- Run polysemy's boilerplate generator to wrap the constructors of 'Query',
@@ -213,7 +221,7 @@ lookupSpace s = head' . filter f <$> getSpaces
         head' _     = Nothing
 
 currentDisplay :: Q Display
-currentDisplay = sDisplay . head . filter sFocused <$> getSpaces
+currentDisplay = sDisplay . head . filter (unF . sFocused) <$> getSpaces
 
 displayOfSpace :: Space -> Q (Maybe Display)
 displayOfSpace s = fmap sDisplay <$> lookupSpace s
@@ -237,11 +245,11 @@ spaceExists s = not . null . filter f <$> getSpaces
           Right l -> (== Just l) . sLabel
 
 currentSpace :: Q SpaceIndex
-currentSpace = sIndex . head . filter sFocused <$> getSpaces
+currentSpace = sIndex . head . filter (unF . sFocused) <$> getSpaces
 
 spaceIsVisible :: Space -> Q Bool
 spaceIsVisible s = f <$> lookupSpace s
-  where f Nothing  = False
+  where f Nothing  = invis
         f (Just x) = sVisible x
 
 numberFromLabel :: SpaceLabel -> SpaceIndex
@@ -258,7 +266,7 @@ spaceIndexMatches l = f <$> lookupSpace (Right l)
         f (Just x) = sIndex x == numberFromLabel l
 
 currentWindow :: Q Window
-currentWindow = wWindow . head . filter wFocused <$> getWindows
+currentWindow = wWindow . head . filter (unF . wFocused) <$> getWindows
 
 lookupWindow :: Window -> Q WindowInfo
 lookupWindow w = head . filter ((== w) . wWindow) <$> getWindows
@@ -271,8 +279,8 @@ spaceOfWindow w = wSpace <$> lookupWindow w
 --   the assumption that it's not worth storing an improper setup.
 visibleState :: Q (Maybe ([(SpaceLabel, Display)], SpaceLabel))
 visibleState = do spaces <- getSpaces
-                  let visible =   map visInfo $ filter sVisible spaces
-                      focused = sLabel . head $ filter sFocused spaces
+                  let visible =   map visInfo $ filter (unV . sVisible) spaces
+                      focused = sLabel . head $ filter (unF . sFocused) spaces
                   pure $ (,) <$> sequence visible <*> focused
   where visInfo s = (,sDisplay s) <$> sLabel s
 
