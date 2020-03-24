@@ -201,17 +201,17 @@ instance FromJSON WindowInfo where
 makeSem ''Query
 
 -- | Shorthand for values using the 'Query' effect
-type Q a = forall r. Member Query r => Sem r a
+type Q r a = Member Query r => Sem r a
 
 -- | Common queries
 
-displayCount :: Q Natural
+displayCount :: Q r Natural
 displayCount = fromIntegral . length <$> getDisplays
 
-pluggedIn :: Q Bool
+pluggedIn :: Q r Bool
 pluggedIn = (== 2) <$> displayCount
 
-lookupSpace :: Space -> Q (Maybe SpaceInfo)
+lookupSpace :: Space -> Q r (Maybe SpaceInfo)
 lookupSpace s = head' . filter f <$> getSpaces
   where f = case s of
           Left  i -> (==      i) . sIndex
@@ -220,34 +220,34 @@ lookupSpace s = head' . filter f <$> getSpaces
         head' (x:_) = Just x
         head' _     = Nothing
 
-currentDisplay :: Q Display
+currentDisplay :: Q r Display
 currentDisplay = sDisplay . head . filter (unF . sFocused) <$> getSpaces
 
-displayOfSpace :: Space -> Q (Maybe Display)
+displayOfSpace :: Space -> Q r (Maybe Display)
 displayOfSpace s = fmap sDisplay <$> lookupSpace s
 
-spaceOnDisplay :: Space -> Display -> Q Bool
+spaceOnDisplay :: Space -> Display -> Q r Bool
 spaceOnDisplay s d = (== Just d) <$> displayOfSpace s
 
-spacesOnDisplay :: Display -> Q [SpaceIndex]
+spacesOnDisplay :: Display -> Q r [SpaceIndex]
 spacesOnDisplay d = map sIndex . filter ((== d) . sDisplay) <$> getSpaces
 
-indexOfSpace :: SpaceLabel -> Q (Maybe SpaceIndex)
+indexOfSpace :: SpaceLabel -> Q r (Maybe SpaceIndex)
 indexOfSpace l = fmap sIndex <$> lookupSpace (Right l)
 
-labelAtIndex :: SpaceIndex -> Q (Maybe SpaceLabel)
+labelAtIndex :: SpaceIndex -> Q r (Maybe SpaceLabel)
 labelAtIndex i = (>>= sLabel) <$> lookupSpace (Left i)
 
-spaceExists :: Space -> Q Bool
+spaceExists :: Space -> Q r Bool
 spaceExists s = not . null . filter f <$> getSpaces
   where f = case s of
           Left  i -> (==      i) . sIndex
           Right l -> (== Just l) . sLabel
 
-currentSpace :: Q SpaceIndex
+currentSpace :: Q r SpaceIndex
 currentSpace = sIndex . head . filter (unF . sFocused) <$> getSpaces
 
-spaceIsVisible :: Space -> Q Bool
+spaceIsVisible :: Space -> Q r Visible
 spaceIsVisible s = f <$> lookupSpace s
   where f Nothing  = invis
         f (Just x) = sVisible x
@@ -255,29 +255,29 @@ spaceIsVisible s = f <$> lookupSpace s
 numberFromLabel :: SpaceLabel -> SpaceIndex
 numberFromLabel (SLabel l) = SIndex (read (filter isDigit l))
 
-spaceHasIndex :: SpaceLabel -> SpaceIndex -> Q Bool
+spaceHasIndex :: SpaceLabel -> SpaceIndex -> Q r Bool
 spaceHasIndex l i = f <$> lookupSpace (Right l)
   where f Nothing  = False
         f (Just x) = sIndex x == i
 
-spaceIndexMatches :: SpaceLabel -> Q Bool
+spaceIndexMatches :: SpaceLabel -> Q r Bool
 spaceIndexMatches l = f <$> lookupSpace (Right l)
   where f Nothing  = False
         f (Just x) = sIndex x == numberFromLabel l
 
-currentWindow :: Q Window
+currentWindow :: Q r Window
 currentWindow = wWindow . head . filter (unF . wFocused) <$> getWindows
 
-lookupWindow :: Window -> Q WindowInfo
+lookupWindow :: Window -> Q r WindowInfo
 lookupWindow w = head . filter ((== w) . wWindow) <$> getWindows
 
-spaceOfWindow :: Window -> Q SpaceIndex
+spaceOfWindow :: Window -> Q r SpaceIndex
 spaceOfWindow w = wSpace <$> lookupWindow w
 
 -- | Get the visible state of the system, so we can restore (parts of) it later.
 --   If the visible or focused spaces aren't labelled, we return Nothing, under
 --   the assumption that it's not worth storing an improper setup.
-visibleState :: Q (Maybe ([(SpaceLabel, Display)], SpaceLabel))
+visibleState :: Q r (Maybe ([(SpaceLabel, Display)], SpaceLabel))
 visibleState = do spaces <- getSpaces
                   let visible =   map visInfo $ filter (unV . sVisible) spaces
                       focused = sLabel . head $ filter (unF . sFocused) spaces
@@ -452,7 +452,7 @@ populateSpaces = destroyBloat >> populate
                                   in not (null (dSpaces info))
 
         -- Pick a 'Space' which can be destroyed, preferring empty ones
-        destroyableSpace :: Q SpaceIndex
+        destroyableSpace :: Q r SpaceIndex
         destroyableSpace = do spaces   <- getSpaces
                               displays <- getDisplays
                               let preferable = filter (destroyable displays)
@@ -476,12 +476,12 @@ shiftSpaceToIndex s want = ql >>= go
                      then pure ()
                      else shiftSpace (Just (label l)) Next >> go l
 
-        ql :: Q SpaceLabel
+        ql :: Q r SpaceLabel
         ql = case s of
           Right x -> pure x
           Left  i -> maybe (err ("No label for space", i)) id <$> labelAtIndex i
 
-        done :: SpaceLabel -> Q Bool
+        done :: SpaceLabel -> Q r Bool
         done l = do mi <- indexOfSpace l
                     case mi of
                       Nothing -> err ("No index for space", l)
