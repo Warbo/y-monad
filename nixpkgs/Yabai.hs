@@ -95,7 +95,7 @@ instance Show SpaceLabel where
 
 -- | For our purposes, a 'Window' is just an ID which we can move from one
 --   'Space' to another.
-newtype Window  = WID Natural deriving (Eq)
+newtype Window  = WID Natural deriving (Eq, Ord)
 
 instance Num Window where
   fromInteger = WID . fromInteger
