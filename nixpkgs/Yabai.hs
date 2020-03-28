@@ -24,6 +24,7 @@ import Data.Maybe (mapMaybe)
 import Data.String
 import Numeric.Natural (Natural)
 import Polysemy
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
 import System.Process.ByteString.Lazy as PBS
 import System.Process.ListLike (proc)
@@ -118,9 +119,10 @@ instance Show Window where
 --   displays, spaces or windows. Yabai provides more options, but we prefer to
 --   pluck things from the JSON ourselves.
 data Query m a where
-  GetDisplays :: Query m [DisplayInfo]
-  GetSpaces   :: Query m [  SpaceInfo]
-  GetWindows  :: Query m [ WindowInfo]
+  GetDisplays ::                            Query m [DisplayInfo]
+  GetSpaces   ::                            Query m [  SpaceInfo]
+  GetWindows  ::                            Query m [ WindowInfo]
+  GetEnvVar   :: String -> (String -> a) -> Query m (Maybe a)
 
 -- | A 'Display' can't be changed, but we can get its ID and any 'Space' values
 --   it contains.
@@ -288,9 +290,10 @@ visibleState = do spaces <- getSpaces
 queryYabai :: Member (Embed IO) r => Sem (Query ': r) a -> Sem r a
 queryYabai = interpret (embed . query)
   where query :: Query m a -> IO a
-        query GetDisplays = run "--displays"
-        query GetSpaces   = run "--spaces"
-        query GetWindows  = run "--windows"
+        query GetDisplays     = run "--displays"
+        query GetSpaces       = run "--spaces"
+        query GetWindows      = run "--windows"
+        query (GetEnvVar v f) = fmap f <$> lookupEnv v
 
         run :: FromJSON a => String -> IO a
         run arg = do
