@@ -309,8 +309,8 @@ queryYabai = interpret (embed . query)
 
 -- | The commands we want to send to Yabai
 data Command m a where
-  CreateSpace  ::                            Command m Bool
-  DestroySpace ::                            Command m Bool
+  CreateSpace  ::                             Command m Bool
+  DestroySpace ::                             Command m Bool
   LabelSpace   :: SpaceIndex -> SpaceLabel -> Command m Bool
   FocusWindow  :: Either Sentinel Window   -> Command m Bool
   FocusSpace   :: Space                    -> Command m Bool
@@ -432,11 +432,14 @@ moveSpaceToDisplay s d = do vis     <- visibleState
 type QC a = forall r. (Member Query r, Member Command r) => Sem r a
 
 populateSpaces :: QC ()
-populateSpaces = destroyBloat >> populate
-  where -- Keep destroying 'Space' values until there are as many as spaceLabels
+populateSpaces = populateSpaces' spaceLabels
+
+populateSpaces' :: [SpaceLabel] -> QC ()
+populateSpaces' labels =  destroyBloat >> populate
+  where -- Keep destroying 'Space' values until there are as many as labels
         destroyBloat :: QC ()
         destroyBloat = do spaces <- getSpaces
-                          if length spaces > length spaceLabels
+                          if length spaces > length labels
                              then do s <- destroyableSpace
                                      focusSpace (index s)
                                      destroySpace
@@ -466,7 +469,7 @@ populateSpaces = destroyBloat >> populate
 
         populate :: QC ()
         populate = do spaces <- getSpaces
-                      if length spaces < length spaceLabels
+                      if length spaces < length labels
                          then createSpace >> populate
                          else pure ()
 
@@ -492,9 +495,12 @@ shiftSpaceToIndex s want = ql >>= go
 -}
 
 labelSpaces :: QC ()
-labelSpaces = do spaces <- getSpaces
-                 removeDodgyLabels spaces
-                 mapM_ ensureLabelled spaceLabels
+labelSpaces = labelSpaces' spaceLabels
+
+labelSpaces' :: [SpaceLabel] -> QC ()
+labelSpaces' labels = do spaces <- getSpaces
+                         removeDodgyLabels spaces
+                         mapM_ ensureLabelled labels
 
   where removeDodgyLabels :: [SpaceInfo] -> C
         removeDodgyLabels spaces = let f info = (,sIndex info) <$> sLabel info
