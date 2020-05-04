@@ -1,0 +1,30 @@
+# YMonad #
+
+This is a collection of scripts for controlling the Yabai window manager for
+macOS, so that it behaves more like the XMonad window manager for Linux.
+
+These scripts are implemented in Haskell, and use the Polysemy package to
+abstract over side-effects. The real implementation implements these effects by
+sending commands to Yabai, whilst the test suite implements a dummy in-memory
+window manager.
+
+## Files ##
+
+`Yabai.hs` is the main implementation. It doesn't define `main`, instead it
+defines a `mkMain` function which turns a given command (e.g. `swapVisibles`)
+into an `IO ()` suitable for using as `main`.
+
+`YabaiTests.hs` defines the test suite, and a `main` to run it.
+
+`default.nix` defines Nix packages for a bunch of scripts (each implemented
+using `mkMain`) and a package which collects all of these in a `bin/` directory.
+
+`nixpkgs.nix` defines a known-good version of the nixpkgs repository.
+
+`overlay.nix` is a Nix overlay which exposes the contents of `default.nix` as a
+`y-monad` package.
+
+`overlays.nix` defines a list of overlays, including that of `overlay.nix`, but
+also one of our dependencies called `nix-helpers`.
+
+`release.nix` exposes y-monad, built with the known-good nixpkgs. Useful for CI.
