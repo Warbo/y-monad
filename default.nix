@@ -1,10 +1,15 @@
-{ attrsToDirs', haskellPackages, lib, run, spaces ? lib.range 1 9, withDeps,
-  writeScript }:
+{ attrsToDirs', haskellPackages, lib, mkBin, run, spaces ? lib.range 1 9,
+  withDeps, wrap, writeScript }:
 
 with builtins;
 with lib;
 with rec {
   labels = map (n: "l${toString n}") spaces;
+
+  otool = mkBin {
+    name = "otool";
+    file = /usr/bin/otool;
+  };
 
   deps = extra: haskellPackages.ghcWithPackages (h: [
     h.aeson h.polysemy h.process-extras
@@ -18,7 +23,7 @@ with rec {
 
   compile = extra: n: main: run {
     name   = "haskell-shortcut-${n}";
-    paths  = [ (deps extra) ];
+    paths  = [ (deps extra) otool ];
     vars   = { inherit main; };
     script = ''
       #!/usr/bin/env bash
