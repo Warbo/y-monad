@@ -35,15 +35,15 @@ with rec {
     '';
   };
 
-  tests = run {
+  testRunner = compile
+    [ "lens" "QuickCheck" "tasty" "tasty-quickcheck" ]
+    "tests"
+    ./YabaiTests.hs;
+
+  tests = wrap {
     name   = "YabaiTests";
-    vars   = {
-      tests = compile
-        [ "lens" "QuickCheck" "tasty" "tasty-quickcheck" ]
-        "tests"
-        ./YabaiTests.hs;
-    };
-    script = ''"$tests" && mkdir "$out"'';
+    vars   = { inherit testRunner; };
+    script = ''"$testRunner" && mkdir "$out"'';
   };
 
   haskellShortcut = name: withDeps [ tests ] (compile [] name (mkScript name));
@@ -64,6 +64,12 @@ with rec {
   ] haskellShortcut;
 };
 rec {
-  commands = haskellCommands;
-  package  = attrsToDirs' "y-monad" { bin = commands; };
+  inherit testRunner;
+  commands         = haskellCommands;
+  package          = attrsToDirs' "y-monad" { bin = commands; };
+  integrationTests = wrap {
+    name = "y-monad-integration-tests";
+    file = testRunner;
+    vars = { INTEGRATION = "1"; };
+  };
 }

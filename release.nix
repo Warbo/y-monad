@@ -5,6 +5,7 @@ with {
 {
   inherit ((nixpkgs { inherit overlays; }).y-monad)
     commands
+    integrationTests
     package
     ;
 }
